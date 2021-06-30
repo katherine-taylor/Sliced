@@ -1,0 +1,10 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+# ignore data folder
+data/
+
+# ignore mac things
+.DS_Store

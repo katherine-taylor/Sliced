@@ -1,0 +1,130 @@
+---
+title: "Sliced Lap 1 Week 4: Bagged tree model"
+author: "Katherine Taylor"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#libraries
+library(tidyverse)
+library(tidymodels)
+library(baguette)
+library(lubridate)
+
+tidymodels_prefer()
+# import data
+train <- read_csv(here::here("data/week_04/train.csv")) |>
+  mutate(rain_tomorrow = case_when(
+    rain_tomorrow == 0 ~ "No rain",
+    TRUE ~ "Rain"
+  ))
+test <- read_csv(here::here("data/week_04/test.csv"))
+```
+
+```{r data_exploration}
+skimr::skim(train)
+
+# time series plot is seriously not beneficial 
+train |>
+  ggplot(aes(x = date, y = rain_tomorrow)) +
+  geom_point() +
+  geom_smooth()
+
+# moving on to boxplots
+train |>
+  mutate(rain_tomorrow = case_when(
+    rain_tomorrow == 0 ~ "No rain",
+    TRUE ~ "Rain"
+  )) |>
+  ggplot(aes(y = cloud9am, fill = rain_tomorrow)) +
+  geom_boxplot() +
+  facet_wrap(~wind_dir9am)
+# looks fairly discriminatory actually
+
+# trying other variables
+train |>
+  mutate(rain_tomorrow = case_when(
+    rain_tomorrow == 0 ~ "No rain",
+    TRUE ~ "Rain"
+  )) |>
+  ggplot(aes(y = wind_gust_speed, fill = rain_tomorrow)) +
+  geom_boxplot() +
+  facet_wrap(~wind_dir9am)
+# looks like 9am clouds by wind direction is the most useful
+
+table(train$rain_today, train$rain_tomorrow)
+# also looks like rain_today is useful, should plot
+train |>
+  mutate(rain_tomorrow = case_when(
+    rain_tomorrow == 0 ~ "No rain",
+    TRUE ~ "Rain"
+  )) |>
+  ggplot(aes(y = wind_gust_speed, fill = rain_tomorrow)) +
+  geom_boxplot() +
+  facet_wrap(~rain_today*wind_dir9am)
+# might be slightly useful but hard to tell
+```
+
+```{r recipe}
+rain_rec <- recipe(rain_tomorrow~., data = train) |>
+  update_role(id, new_role = "id_variable") |>
+  step_mutate(year = year(date),
+              month = month(date)) |>
+  step_rm(date) |>
+  step_log(rainfall, offset = 1, base = 2) |>
+  step_other(location, threshold = 0.005) |>
+  step_dummy(location) |>
+  step_mutate(wind_gust_dir = str_sub(wind_gust_dir, 1, 1),
+              wind_dir9am = str_sub(wind_dir9am, 1, 1),
+              wind_dir3pm = str_sub(wind_dir3pm, 1, 1))|>
+  step_novel(all_nominal_predictors()) |>
+  step_other(all_nominal_predictors(), threshold = 0.01) |>
+  step_unknown(all_nominal_predictors()) |>
+  step_dummy(all_nominal_predictors()) |>
+  step_impute_median(all_numeric_predictors()) |>
+  step_zv(all_predictors())
+```
+
+```{r model}
+bag_spec <-
+  bag_tree(min_n = 10) %>%
+  set_engine("rpart", times = 25) %>%
+  set_mode("classification")
+
+```
+
+```{r workflow}
+imb_wf <-
+  workflow() %>%
+  add_recipe(rain_rec) %>%
+  add_model(bag_spec)
+```
+
+```{r model_fit}
+imb_fit <- fit(imb_wf, data = train)
+imb_fit
+```
+
+```{r create_resamples}
+set.seed(6242021)
+rain_folds <- vfold_cv(train, v = 5, strata = rain_tomorrow)
+rain_folds
+rain_metrics <- metric_set(mn_log_loss, accuracy, sensitivity, specificity)
+```
+
+```{r fit_resamples}
+doParallel::registerDoParallel()
+set.seed(6242021)
+imb_rs <-
+  fit_resamples(
+    imb_wf,
+    resamples = rain_folds,
+    metrics = rain_metrics
+  )
+
+# honestly not bad, and big improvement to my original model
+# 06-28-21 slight improvement with additional features from drob's script
+collect_metrics(imb_rs)
+```
+
