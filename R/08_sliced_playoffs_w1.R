@@ -174,3 +174,4 @@ submission <- sub |> cbind("bip_id" = test_data$bip_id) |>
   select(-c(.pred_yup, .pred_nope))
 
 write_csv(submission, here::here("data/week_09/kath_submission_02.csv"))
+
